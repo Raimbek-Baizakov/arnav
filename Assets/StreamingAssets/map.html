@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Map Select</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    #map { position: fixed; inset: 0; z-index: 0; }
+
+    .hint, .panel {
+      position: fixed; left: 12px; right: 12px;
+      z-index: 99999; pointer-events: auto;
+      border-radius: 16px;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    }
+    .hint {
+      top: calc(12px + env(safe-area-inset-top));
+      padding: 10px 12px;
+      background: rgba(0,0,0,0.45);
+      color: #fff;
+      font-size: 14px; line-height: 1.25;
+    }
+    .panel {
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      padding: 10px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      display: flex; gap: 10px; align-items: center;
+    }
+    .status { flex: 1; font-size: 14px; line-height: 1.25; min-width: 0; opacity: 0.95; }
+    .btn {
+      font-size: 15px; padding: 10px 12px;
+      border: 0; border-radius: 14px;
+      background: #fff; color: #000;
+      cursor: pointer; white-space: nowrap; user-select: none;
+    }
+    .btn.secondary { background: rgba(255,255,255,0.85); }
+    .btn:active { transform: translateY(1px); }
+
+    .leaflet-top { top: calc(10px + env(safe-area-inset-top) + 56px); }
+    .leaflet-left { left: 10px; }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+
+
+  <div class="panel">
+    <div class="status" id="status">Старт: —<br>Финиш: —<br>Маршрут: —</div>
+    <button class="btn secondary" id="btnMe">Я здесь</button>
+    <button class="btn secondary" id="btnReset">Сброс</button>
+    <button class="btn" id="btnDone">Готово</button>
+  </div>
+
+  <script>
+    // =========================
+    // Unity bridge
+    // =========================
+    function sendToUnity(obj) {
+      const json = JSON.stringify(obj);
+      const encoded = encodeURIComponent(json);
+      if (window.Unity && typeof window.Unity.call === "function") {
+        window.Unity.call(encoded);
+        return;
+      }
+      try { window.location = "unity:" + encoded; } catch (e) {}
+    }
+
+    // =========================
+    // Map init
+    // =========================
+    const map = L.map('map', {
+      zoomControl: false,
+      attributionControl: false // убирает блок Leaflet/OSM
+    }).setView([43.238949, 76.889709], 13);
+
+    L.control.zoom({ position: 'topleft' }).addTo(map);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    // =========================
+    // Reverse geocode (Nominatim) + cache
+    // =========================
+    const geocodeCache = new Map();
+
+    async function reverseGeocode(latlng) {
+      const key = `${latlng.lat.toFixed(5)},${latlng.lng.toFixed(5)}`;
+      if (geocodeCache.has(key)) return geocodeCache.get(key);
+
+      const url =
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2` +
+        `&lat=${encodeURIComponent(latlng.lat)}` +
+        `&lon=${encodeURIComponent(latlng.lng)}` +
+        `&zoom=18&addressdetails=1`;
+
+      const res = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error("Nominatim HTTP " + res.status);
+
+      const data = await res.json();
+      const a = data.address || {};
+
+      const street = a.road || a.pedestrian || a.footway || a.cycleway || a.path || "";
+      const house = a.house_number || "";
+      const suburb = a.suburb || a.neighbourhood || "";
+      const city = a.city || a.town || a.village || a.county || "";
+
+      const short =
+        (street ? (street + (house ? ", " + house : "")) : (suburb || city || data.display_name || ""))
+        + (city && street ? (" · " + city) : "");
+
+      const result = short || data.display_name || "Неизвестное место";
+      geocodeCache.set(key, result);
+      return result;
+    }
+
+    // =========================
+    // Route (OSRM)
+    // =========================
+    function humanDistance(m) {
+      if (m == null) return "—";
+      if (m < 1000) return `${Math.round(m)} м`;
+      return `${(m/1000).toFixed(2)} км`;
+    }
+
+    function humanTime(s) {
+      if (s == null) return "—";
+      const min = Math.round(s / 60);
+      if (min < 60) return `${min} мин`;
+      const h = Math.floor(min / 60);
+      const r = min % 60;
+      return `${h} ч ${r} мин`;
+    }
+
+    async function fetchRouteOSRM(a, b) {
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${a.lng},${a.lat};${b.lng},${b.lat}` +
+        `?overview=full&geometries=geojson&steps=false`;
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("OSRM HTTP " + res.status);
+      const data = await res.json();
+      if (!data.routes || !data.routes.length) throw new Error("No route");
+
+      const r = data.routes[0];
+      return {
+        coords: r.geometry.coordinates, // [lon,lat]...
+        distance_m: r.distance,
+        duration_s: r.duration
+      };
+    }
+
+    // =========================
+    // State
+    // =========================
+    let start = null, end = null;
+    let startMarker = null, endMarker = null;
+
+    let startLabel = "—";
+    let endLabel = "—";
+
+    let routeLine = null;
+    let routeInfo = null;
+    let routeRequestId = 0;
+
+    function updateStatus() {
+      const routeText = routeInfo
+        ? `${humanDistance(routeInfo.distance_m)}, ${humanTime(routeInfo.duration_s)}`
+        : "—";
+      document.getElementById("status").innerHTML =
+        `Старт: ${startLabel}<br>Финиш: ${endLabel}<br>Маршрут: ${routeText}`;
+    }
+
+    function clearRoute() {
+      routeInfo = null;
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      updateStatus();
+    }
+
+    async function refreshStartLabel() {
+      if (!start) { startLabel = "—"; updateStatus(); return; }
+      startLabel = "Определяю адрес…";
+      updateStatus();
+      try { startLabel = await reverseGeocode(start); }
+      catch { startLabel = "Адрес не найден"; }
+      updateStatus();
+    }
+
+    async function refreshEndLabel() {
+      if (!end) { endLabel = "—"; updateStatus(); return; }
+      endLabel = "Определяю адрес…";
+      updateStatus();
+      try { endLabel = await reverseGeocode(end); }
+      catch { endLabel = "Адрес не найден"; }
+      updateStatus();
+    }
+
+    async function maybeBuildRoute() {
+      if (!start || !end) return;
+
+      const myId = ++routeRequestId;
+      clearRoute();
+
+      try {
+        const r = await fetchRouteOSRM(start, end);
+        if (myId !== routeRequestId) return;
+
+        const latlngs = r.coords.map(c => [c[1], c[0]]);
+
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = L.polyline(latlngs, { weight: 6, opacity: 0.9 }).addTo(map);
+
+        map.fitBounds(routeLine.getBounds(), { padding: [40, 120] });
+
+        routeInfo = { distance_m: r.distance_m, duration_s: r.duration_s };
+        updateStatus();
+      } catch (e) {
+        routeInfo = null;
+        if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+        updateStatus();
+        alert("Не удалось построить маршрут/адрес. Проверь интернет.");
+      }
+    }
+
+    function setStart(latlng, pan = true) {
+      start = latlng;
+      if (!startMarker) {
+        startMarker = L.marker(start, { draggable: true }).addTo(map).bindPopup("Старт");
+        startMarker.on('dragend', (ev) => {
+          start = ev.target.getLatLng();
+          refreshStartLabel();
+          maybeBuildRoute();
+        });
+      } else startMarker.setLatLng(start);
+
+      if (pan) map.panTo(start);
+      startMarker.openPopup();
+
+      refreshStartLabel();
+      maybeBuildRoute();
+    }
+
+    function setEnd(latlng, pan = true) {
+      end = latlng;
+      if (!endMarker) {
+        endMarker = L.marker(end, { draggable: true }).addTo(map).bindPopup("Финиш");
+        endMarker.on('dragend', (ev) => {
+          end = ev.target.getLatLng();
+          refreshEndLabel();
+          maybeBuildRoute();
+        });
+      } else endMarker.setLatLng(end);
+
+      if (pan) map.panTo(end);
+      endMarker.openPopup();
+
+      refreshEndLabel();
+      maybeBuildRoute();
+    }
+
+    // Clicks: start -> end -> move end
+    map.on('click', (e) => {
+      if (!start) setStart(e.latlng);
+      else if (!end) setEnd(e.latlng);
+      else setEnd(e.latlng);
+    });
+
+    // Buttons
+    document.getElementById("btnReset").addEventListener("click", () => {
+      start = null; end = null;
+      startLabel = "—"; endLabel = "—";
+
+      if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+      if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
+
+      routeRequestId++;
+      clearRoute();
+
+      sendToUnity({ type: "reset" });
+      updateStatus();
+    });
+
+    document.getElementById("btnDone").addEventListener("click", async () => {
+      if (!start || !end) { alert("Выбери Старт и Финиш."); return; }
+
+      // гарантируем что адреса не "Определяю..."
+      try {
+        if (!startLabel || startLabel === "—" || startLabel.includes("Определяю")) startLabel = await reverseGeocode(start);
+        if (!endLabel || endLabel === "—" || endLabel.includes("Определяю")) endLabel = await reverseGeocode(end);
+      } catch(e) {}
+
+      sendToUnity({
+        type: "done",
+        start: { lat: start.lat, lon: start.lng, address: startLabel },
+        end:   { lat: end.lat,   lon: end.lng,   address: endLabel }
+      });
+    });
+
+    document.getElementById("btnMe").addEventListener("click", () => {
+      if (!navigator.geolocation) { alert("Геолокация не поддерживается."); return; }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const me = L.latLng(pos.coords.latitude, pos.coords.longitude);
+          map.setView(me, Math.max(map.getZoom(), 16));
+          setStart(me, false);
+
+          sendToUnity({ type: "gps", start: { lat: me.lat, lon: me.lng } });
+        },
+        () => alert("Не удалось получить GPS. Проверь разрешение 'Местоположение' и включён ли GPS."),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 2000 }
+      );
+    });
+
+    updateStatus();
+  </script>
+</body>
+</html>
