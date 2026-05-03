@@ -1,16 +1,30 @@
 using UnityEngine;
 using UnityEngine.UI;
 
+/// <summary>
+/// Контроллер камеры для отображения видео-потока.
+/// Управляет выбором камеры устройства и отображением видео на RawImage.
+/// </summary>
 public class CameraFeed : MonoBehaviour
 {
+    // === КОМПОНЕНТЫ ===
+
+    /// <summary>RawImage компонент для отображения видео-потока камеры.</summary>
     public RawImage rawImage;
 
+    // === НАСТРОЙКИ ===
+
+    /// <summary>Подстрока для поиска предпочитаемой камеры в редакторе (например, "Iriun").</summary>
     [Header("Editor only (PC): pick Iriun if available")]
     public string editorPreferredSubstring = "Iriun";
 
+    /// <summary>Предпочитать заднюю камеру на Android.</summary>
     [Header("Android: prefer back camera")]
     public bool androidPreferBackCamera = true;
 
+    // === ВНУТРЕННИЕ ПОЛЯ ===
+
+    /// <summary>Текстура веб-камеры для захвата видео.</summary>
     private WebCamTexture camTexture;
 
     void Start()
@@ -62,6 +76,10 @@ public class CameraFeed : MonoBehaviour
         camTexture.Play();
     }
 
+    /// <summary>
+    /// Останавливает камеру при отключении компонента.
+    /// Освобождает ресурсы WebCamTexture.
+    /// </summary>
     void OnDisable()
     {
         if (camTexture != null && camTexture.isPlaying)

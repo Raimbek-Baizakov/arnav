@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Compass Bridge</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            font-family: monospace;
+            font-size: 12px;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #status {
+            padding: 10px;
+            background: rgba(0, 100, 0, 0.5);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Compass: waiting...</div>
+
+    <script>
+        // Просто слушаем deviceorientation и отправляем в Unity
+        function handleDeviceOrientation(event) {
+            let angle = null;
+            
+            // Пробуем разные способы получить heading
+            if (typeof event.webkitCompassHeading === 'number') {
+                angle = event.webkitCompassHeading;
+            } else if (typeof event.alpha === 'number') {
+                angle = 360 - event.alpha;
+            }
+            
+            if (angle !== null) {
+                // Отправляем в Unity
+                if (window.unity && typeof window.unity.postMessage === 'function') {
+                    window.unity.postMessage(JSON.stringify({
+                        type: 'set_heading', 
+                        heading: angle
+                    }));
+                }
+                
+                // Показываем статус
+                document.getElementById('status').textContent = 
+                    'Compass: ' + angle.toFixed(1) + '°';
+            }
+        }
+
+        // Запускаем слушатель
+        window.addEventListener('deviceorientationabsolute', handleDeviceOrientation, true);
+        window.addEventListener('deviceorientation', handleDeviceOrientation, true);
+        
+        console.log('Compass bridge loaded');
+        if (window.unity) {
+            window.unity.postMessage(JSON.stringify({type: 'test_alive', timestamp: Date.now()}));
+        }
+    </script>
+</body>
+</html>

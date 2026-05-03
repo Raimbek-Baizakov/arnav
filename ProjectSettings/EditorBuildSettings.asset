@@ -11,7 +11,7 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/CameraScene.unity
     guid: 3034af9073790634d86ddba84fbd8b8b
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/MainMenuScene.unity
     guid: ca8c3e6734f557b4fa9f19fbb4e99a5f
   - enabled: 0
@@ -26,6 +26,9 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/CameraScene.unity
     guid: 587f997216263ce48bca8210dd57d89f
+  - enabled: 0
+    path: Assets/Scenes/GPS.unity
+    guid: dfa92972faadb8845a6a1dbea941c6b3
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0
